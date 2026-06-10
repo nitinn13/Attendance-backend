@@ -4,12 +4,11 @@
   "description": "College Attendance System backend",
   "main": "dist/index.js",
   "type": "module",
-
   "scripts": {
     "test": "echo \"No tests configured\"",
     "dev": "tsc -b && node ./dist/index.js",
-    "build": "tsc -b",
-    "start" : "node ./dist/index.js",
+    "build": "prisma generate && tsc -b",
+    "start": "node ./dist/index.js",
     "postinstall": "prisma generate"
   },
   "keywords": [],
