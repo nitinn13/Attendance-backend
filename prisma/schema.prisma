@@ -1,0 +1,71 @@
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  TEACHER
+  STUDENT
+}
+
+model User {
+  userId    Int       @id @default(autoincrement())
+  name      String
+  email     String    @unique
+  password  String
+  role      Role
+  uuid      String?
+
+  createdAt DateTime  @default(now())
+
+  classesTeaching Class[]       @relation("TeacherClasses")
+  enrollments     Enrollment[]
+  attendances     Attendance[]
+}
+
+model Class {
+  id               Int          @id @default(autoincrement())
+  name             String
+  teacherId        Int
+  teacher          User         @relation("TeacherClasses", fields: [teacherId], references: [userId])
+  isAttendanceOpen Boolean      @default(false)
+
+  enrollments      Enrollment[]
+  attendances      Attendance[]
+
+  createdAt        DateTime     @default(now())
+}
+
+model Enrollment {
+  id        Int   @id @default(autoincrement())
+  classId   Int
+  studentId Int
+
+  class     Class @relation(fields: [classId], references: [id])
+  student   User  @relation(fields: [studentId], references: [userId])
+
+  @@unique([classId, studentId]) 
+}
+enum Status {
+  PRESENT
+  ABSENT
+}
+
+model Attendance {
+  id        Int      @id @default(autoincrement())
+  date      DateTime @default(now())
+  classId   Int
+  studentId Int
+  status    Status   
+
+  class     Class    @relation(fields: [classId], references: [id])
+  student   User     @relation(fields: [studentId], references: [userId])
+
+  @@unique([classId, studentId]) 
+}

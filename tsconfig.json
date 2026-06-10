@@ -1,0 +1,38 @@
+{
+  "compilerOptions": {
+    /* File Layout */
+    "rootDir": "./src",
+    "outDir": "./dist",
+
+    /* Environment Settings */
+    "target": "ESNext",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+
+    /* Node.js types */
+    "lib": ["ESNext"],
+    "types": ["node"],
+
+    /* Outputs */
+    "sourceMap": true,
+    "declaration": true,
+    "declarationMap": true,
+
+    /* Stricter Typechecking */
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+
+    /* Style Options */
+    // "noImplicitReturns": true,
+    // "noUnusedLocals": true,
+    // "noUnusedParameters": true,
+
+    /* ESM-friendly settings */
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "skipLibCheck": true
+  },
+  "include": ["src"],
+  "exclude": ["node_modules", "dist"]
+}
