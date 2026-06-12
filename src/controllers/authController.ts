@@ -156,3 +156,40 @@ export const logout = async (req: Request, res: Response) => {
         res.status(500).json({ message: "Server error" });
     }
 };
+
+
+export const logoutAllUsers = async (
+  req: Request,
+  res: Response
+) => {
+  try {
+    if (req.role !== "ADMIN") {
+      return res.status(403).json({
+        message:
+          "Only admin can reset devices",
+      });
+    }
+
+    const result =
+      await prisma.user.updateMany({
+        data: {
+          uuid: null,
+        },
+      });
+
+    return res.status(200).json({
+      message:
+        "All user devices reset successfully",
+      usersUpdated: result.count,
+    });
+  } catch (err) {
+    console.error(
+      "Reset all devices error:",
+      err
+    );
+
+    return res.status(500).json({
+      message: "Server error",
+    });
+  }
+};
