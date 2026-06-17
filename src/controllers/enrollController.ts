@@ -142,6 +142,114 @@ export const enrollAllStudents = async (req: Request, res: Response) => {
     }
 };
 
+export const enrollMultipleStudents = async (req: Request, res: Response) => {
+    if (req.role !== "ADMIN") {
+        return res.status(403).json({
+            message: "Only admin can enroll students"
+        });
+    }
+
+    try {
+        const schema = z.object({
+            classId: z.number(),
+            studentIds: z.array(z.number()).min(1)
+        });
+
+        const result = schema.safeParse(req.body);
+
+        if (!result.success) {
+            console.log("Validation Error:", result.error.format());
+            return res.status(400).json({
+                message: "Invalid input"
+            });
+        }
+
+        const { classId, studentIds } = result.data;
+
+        // Check class exists
+        const class_ = await prisma.class.findUnique({
+            where: { id: classId }
+        });
+
+        if (!class_) {
+            return res.status(404).json({
+                message: "Class not found"
+            });
+        }
+
+        // Get valid students
+        const students = await prisma.user.findMany({
+            where: {
+                userId: {
+                    in: studentIds
+                },
+                role: "STUDENT"
+            },
+            select: {
+                userId: true
+            }
+        });
+
+        if (students.length === 0) {
+            return res.status(400).json({
+                message: "No valid students found"
+            });
+        }
+
+        const validStudentIds = students.map(s => s.userId);
+
+        // Find already enrolled students
+        const existingEnrollments = await prisma.enrollment.findMany({
+            where: {
+                classId,
+                studentId: {
+                    in: validStudentIds
+                }
+            },
+            select: {
+                studentId: true
+            }
+        });
+
+        const enrolledIds = new Set(
+            existingEnrollments.map(e => e.studentId)
+        );
+
+        // Students that need enrollment
+        const studentsToEnroll = validStudentIds.filter(
+            id => !enrolledIds.has(id)
+        );
+
+        if (studentsToEnroll.length === 0) {
+            return res.status(400).json({
+                message: "All selected students are already enrolled"
+            });
+        }
+
+        const created = await prisma.enrollment.createMany({
+            data: studentsToEnroll.map(studentId => ({
+                classId,
+                studentId
+            })),
+            skipDuplicates: true
+        });
+
+        return res.status(200).json({
+            message: "Students enrolled successfully",
+            requested: studentIds.length,
+            validStudents: validStudentIds.length,
+            newlyEnrolled: created.count,
+            skipped: validStudentIds.length - created.count
+        });
+
+    } catch (err) {
+        console.error("Enroll multiple students error:", err);
+        return res.status(500).json({
+            message: "Server error"
+        });
+    }
+};
+
 
 export const allEnrollments = async (req: Request, res: Response) => {
     if (req.role !== "ADMIN") {
