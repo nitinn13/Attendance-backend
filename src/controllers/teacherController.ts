@@ -14,7 +14,7 @@ export const myClasses = async (req: Request, res: Response) => {
                 id: true,
                 name: true,
                 isAttendanceOpen: true,
-                createdAt: true,
+                classDate: true,
                 enrollments: {
                     select: { id: true, studentId: true }
                 }
