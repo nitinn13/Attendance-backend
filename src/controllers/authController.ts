@@ -9,54 +9,105 @@ const jwtSecret = process.env.JWT_SECRET as string;
 
 
 // Register (college-side)
-export const register = async (req: Request, res: Response) => {
+export const register = async (
+    req: Request,
+    res: Response
+) => {
     try {
         const userSchema = z.object({
             name: z.string().min(2),
             email: z.string().email(),
             password: z.string().min(6),
-            role: z.enum(["ADMIN", "TEACHER", "STUDENT"])
+            university: z.string().optional(),
+            role: z.enum([
+                "ADMIN",
+                "TEACHER",
+                "STUDENT"
+            ])
         });
-        const result = userSchema.safeParse(req.body);
+
+        const result =
+            userSchema.safeParse(req.body);
+
         if (!result.success) {
-            console.log("Validation Error:", result);
-            return res.status(400).json({ message: "Invalid input" });
+            console.log(
+                "Validation Error:",
+                result.error.format()
+            );
+
+            return res.status(400).json({
+                message: "Invalid input"
+            });
         }
 
-        const { name, email, password, role } = result.data;
+        const {
+            name,
+            email,
+            password,
+            role,
+            university
+        } = result.data;
 
+        const existingUser =
+            await prisma.user.findUnique({
+                where: {
+                    email
+                }
+            });
 
-        const existingUSer = await prisma.user.findUnique({
-            where: {
-                email: email
-            }
-        });
-        if (existingUSer) return res.status(400).json({ message: "User already exists" });
+        if (existingUser) {
+            return res.status(400).json({
+                message:
+                    "User already exists"
+            });
+        }
 
-        const hashedPassword = await bcrypt.hash(password, 10);
+        const hashedPassword =
+            await bcrypt.hash(
+                password,
+                10
+            );
 
-        const newUser = await prisma.user.create({
-            data: {
-                name,
-                email,
-                password: hashedPassword,
-                role: role || "STUDENT"
-            }
-        });
-
+        const newUser =
+            await prisma.user.create({
+                data: {
+                    name,
+                    email,
+                    password:
+                        hashedPassword,
+                    university: university ?? null,
+                    role:
+                        role ||
+                        "STUDENT"
+                }
+            });
 
         res.status(200).json({
-            message: "User registered successfully",
+            message:
+                "User registered successfully",
             newUser: {
-                userId: newUser.userId,
-                name: newUser.name,
-                email: newUser.email,
-                role: newUser.role
+                userId:
+                    newUser.userId,
+                name:
+                    newUser.name,
+                email:
+                    newUser.email,
+                university:
+                    newUser.university,
+                role:
+                    newUser.role
             }
         });
     } catch (err) {
-        console.error("Register error:", err);
-        res.status(500).json({ message: "Server error" });
+        console.error(
+            "Register error:",
+            err
+        );
+
+        res.status(500).json({
+            message:
+                "Server error"
+        });
     }
 };
 
@@ -159,37 +210,40 @@ export const logout = async (req: Request, res: Response) => {
 
 
 export const logoutAllUsers = async (
-  req: Request,
-  res: Response
+    req: Request,
+    res: Response
 ) => {
-  try {
-    if (req.role !== "ADMIN") {
-      return res.status(403).json({
-        message:
-          "Only admin can reset devices",
-      });
+    try {
+        if (req.role !== "ADMIN") {
+            return res.status(403).json({
+                message:
+                    "Only admin can reset devices",
+            });
+        }
+
+
+        const result = await prisma.user.updateMany({
+            where: {
+                role: "STUDENT"
+            },
+            data: {
+                uuid: null
+            }
+        });
+
+        return res.status(200).json({
+            message:
+                "All user devices reset successfully",
+            usersUpdated: result.count,
+        });
+    } catch (err) {
+        console.error(
+            "Reset all devices error:",
+            err
+        );
+
+        return res.status(500).json({
+            message: "Server error",
+        });
     }
-
-    const result =
-      await prisma.user.updateMany({
-        data: {
-          uuid: null,
-        },
-      });
-
-    return res.status(200).json({
-      message:
-        "All user devices reset successfully",
-      usersUpdated: result.count,
-    });
-  } catch (err) {
-    console.error(
-      "Reset all devices error:",
-      err
-    );
-
-    return res.status(500).json({
-      message: "Server error",
-    });
-  }
 };
