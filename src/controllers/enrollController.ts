@@ -2,6 +2,9 @@ import { type Request, type Response } from "express";
 import z from "zod";
 import { prisma } from "../prisma.js";
 
+// Express.Multer.File is added to Request by the `multer` middleware
+// (see csvUpload.ts). req.file is only present on routes that use it.
+
 
 export const enrollStudents = async (req: Request, res: Response) => {
     if (req.role !== "ADMIN") {
@@ -250,6 +253,188 @@ export const enrollMultipleStudents = async (req: Request, res: Response) => {
     }
 };
 
+
+export const enrollByCsv = async (req: Request, res: Response) => {
+    if (req.role !== "ADMIN") {
+        return res.status(403).json({
+            message: "Only admin can enroll students"
+        });
+    }
+
+    try {
+        const classIdRaw = req.body?.classId;
+        const classId = Number(classIdRaw);
+
+        if (!classIdRaw || Number.isNaN(classId)) {
+            return res.status(400).json({
+                message: "Invalid or missing classId"
+            });
+        }
+
+        if (!req.file) {
+            return res.status(400).json({
+                message: "CSV file is required"
+            });
+        }
+
+        // Check class exists
+        const class_ = await prisma.class.findUnique({
+            where: { id: classId }
+        });
+
+        if (!class_) {
+            return res.status(404).json({
+                message: "Class not found"
+            });
+        }
+
+        // Parse CSV buffer -> list of emails
+        const csvText = req.file.buffer.toString("utf-8");
+        const rawLines = csvText
+            .split(/\r?\n/)
+            .map(line => line.trim())
+            .filter(line => line.length > 0);
+
+        if (rawLines.length === 0) {
+            return res.status(400).json({
+                message: "CSV file is empty"
+            });
+        }
+
+        // Support a header row (e.g. "email") or no header at all.
+        // If the first cell of the first line isn't a valid-looking
+        // email, treat that line as a header and skip it.
+        const emailLooksValid = (value: string) =>
+            /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+
+        // const firstCell = rawLines[0].split(",")[0].trim();
+        const firstCell =
+            rawLines[0]
+                ?.split(",")[0]
+                ?.trim() ?? "";
+        const dataLines = emailLooksValid(firstCell)
+            ? rawLines
+            : rawLines.slice(1);
+
+        // Extract first column as email, dedupe (case-insensitive)
+        const emailsInFile: string[] = [];
+        const seen = new Set<string>();
+
+        for (const line of dataLines) {
+            const cell = line.split(",")[0]?.trim();
+            if (!cell) continue;
+
+            const normalized = cell.toLowerCase();
+            if (seen.has(normalized)) continue;
+            seen.add(normalized);
+            emailsInFile.push(cell);
+        }
+
+        if (emailsInFile.length === 0) {
+            return res.status(400).json({
+                message: "No valid email addresses found in CSV"
+            });
+        }
+
+        // Look up matching users
+        const normalizedEmails = emailsInFile.map(e => e.toLowerCase());
+
+        const matchedUsers = await prisma.user.findMany({
+            where: {
+                email: { in: normalizedEmails },
+            },
+            select: {
+                userId: true,
+                email: true,
+                role: true,
+            }
+        });
+
+        const matchedByEmail = new Map(
+            matchedUsers.map(u => [u.email.toLowerCase(), u])
+        );
+
+        const notFound: string[] = [];
+        const wrongRole: string[] = [];
+        const validUsers: { userId: number; email: string }[] = [];
+
+        for (const email of emailsInFile) {
+            const match = matchedByEmail.get(email.toLowerCase());
+
+            if (!match) {
+                notFound.push(email);
+                continue;
+            }
+
+            if (match.role !== "STUDENT") {
+                wrongRole.push(email);
+                continue;
+            }
+
+            validUsers.push({ userId: match.userId, email: match.email });
+        }
+
+        if (validUsers.length === 0) {
+            return res.status(400).json({
+                message: "No valid students found in CSV",
+                notFound,
+                wrongRole
+            });
+        }
+
+        // Find already enrolled among the valid set
+        const existingEnrollments = await prisma.enrollment.findMany({
+            where: {
+                classId,
+                studentId: { in: validUsers.map(u => u.userId) }
+            },
+            select: { studentId: true }
+        });
+
+        const alreadyEnrolledIds = new Set(
+            existingEnrollments.map(e => e.studentId)
+        );
+
+        const toEnroll = validUsers.filter(
+            u => !alreadyEnrolledIds.has(u.userId)
+        );
+
+        const alreadyEnrolledEmails = validUsers
+            .filter(u => alreadyEnrolledIds.has(u.userId))
+            .map(u => u.email);
+
+        if (toEnroll.length === 0) {
+            return res.status(400).json({
+                message: "All matched students are already enrolled in this class",
+                alreadyEnrolled: alreadyEnrolledEmails,
+                notFound,
+                wrongRole
+            });
+        }
+
+        const created = await prisma.enrollment.createMany({
+            data: toEnroll.map(u => ({
+                classId,
+                studentId: u.userId
+            })),
+            skipDuplicates: true
+        });
+
+        return res.status(200).json({
+            message: "Students enrolled successfully from CSV",
+            totalRowsInFile: emailsInFile.length,
+            newlyEnrolled: created.count,
+            alreadyEnrolled: alreadyEnrolledEmails,
+            notFound,
+            wrongRole
+        });
+    } catch (err) {
+        console.error("Enroll by CSV error:", err);
+        return res.status(500).json({
+            message: "Server error"
+        });
+    }
+};
 
 export const allEnrollments = async (req: Request, res: Response) => {
     if (req.role !== "ADMIN") {
