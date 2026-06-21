@@ -11,8 +11,17 @@ export const studentClasses = async (req: Request, res: Response) => {
             select: {
                 id: true,
                 name: true,
-                isAttendanceOpen: true,
-                classDate: true
+                recurrenceDays: true,
+                startDate: true,
+                endDate: true,
+                sessions: {
+                    orderBy: { date: "asc" },
+                    select: {
+                        id: true,
+                        date: true,
+                        isAttendanceOpen: true
+                    }
+                }
             }
         });
 
@@ -35,7 +44,7 @@ export const markAttendance = async (req: Request, res: Response) => {
 
     try {
         const schema = z.object({
-            classId: z.number(),
+            sessionId: z.number(),
         });
 
         const result = schema.safeParse(req.body);
@@ -43,35 +52,38 @@ export const markAttendance = async (req: Request, res: Response) => {
             return res.status(400).json({ message: "Invalid input" });
         }
 
-        const { classId } = result.data;
+        const { sessionId } = result.data;
         const status = "PRESENT";
 
-        const class_ = await prisma.class.findUnique({ where: { id: classId } });
-        if (!class_) return res.status(400).json({ message: "Class not found" });
+        const session = await prisma.session.findUnique({
+            where: { id: sessionId }
+        });
+        if (!session) return res.status(400).json({ message: "Session not found" });
 
         const enrolled = await prisma.enrollment.findFirst({
-            where: { classId: classId, studentId: req.userId! }
+            where: { classId: session.classId, studentId: req.userId! }
         });
         if (!enrolled) {
             return res.status(403).json({ message: "You are not enrolled in this class" });
         }
 
-        if (!class_.isAttendanceOpen) {
-            return res.status(400).json({ message: "Class is not open for attendance" });
+        if (!session.isAttendanceOpen) {
+            return res.status(400).json({ message: "Attendance is not open for this session" });
         }
+
         const existingAttendance = await prisma.attendance.findFirst({
             where: {
-                classId,
+                sessionId,
                 studentId: req.userId!,
             }
         });
         if (existingAttendance) {
-            return res.status(400).json({ message: "You already marked attendance for today" });
+            return res.status(400).json({ message: "You already marked attendance for this session" });
         }
 
         const newAttendance = await prisma.attendance.create({
             data: {
-                classId: classId,
+                sessionId,
                 studentId: req.userId!,
                 status: status
             }

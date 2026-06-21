@@ -13,10 +13,19 @@ export const myClasses = async (req: Request, res: Response) => {
             select: {
                 id: true,
                 name: true,
-                isAttendanceOpen: true,
-                classDate: true,
+                recurrenceDays: true,
+                startDate: true,
+                endDate: true,
                 enrollments: {
                     select: { id: true, studentId: true }
+                },
+                sessions: {
+                    orderBy: { date: "asc" },
+                    select: {
+                        id: true,
+                        date: true,
+                        isAttendanceOpen: true
+                    }
                 }
             }
         });
@@ -38,37 +47,40 @@ export const openAttendance = async (req: Request, res: Response) => {
     }
 
     try {
-        const schema = z.object({ classId: z.number() });
+        const schema = z.object({ sessionId: z.number() });
         const result = schema.safeParse(req.body);
         if (!result.success) {
             return res.status(400).json({ message: "Invalid input" });
         }
 
-        const { classId } = result.data;
+        const { sessionId } = result.data;
 
-        const class_ = await prisma.class.findUnique({ where: { id: classId } });
-        if (!class_) return res.status(400).json({ message: "Class not found" });
+        const session = await prisma.session.findUnique({
+            where: { id: sessionId },
+            include: { class: true }
+        });
+        if (!session) return res.status(400).json({ message: "Session not found" });
 
-        if (class_.teacherId !== req.userId) {
+        if (session.class.teacherId !== req.userId) {
             return res.status(403).json({ message: "You are not authorized to open attendance" });
         }
 
-        if (class_.isAttendanceOpen) {
-            return res.status(400).json({ message: "Class is already open for attendance" });
+        if (session.isAttendanceOpen) {
+            return res.status(400).json({ message: "Session is already open for attendance" });
         }
 
-        const updated = await prisma.class.update({
-            where: { id: classId },
+        const updated = await prisma.session.update({
+            where: { id: sessionId },
             data: { isAttendanceOpen: true }
         });
 
         res.status(200).json({
             message: "Attendance opened successfully",
-            class: {
+            session: {
                 id: updated.id,
-                name: updated.name,
-                isAttendanceOpen: updated.isAttendanceOpen,
-                teacherId: updated.teacherId
+                classId: updated.classId,
+                date: updated.date.toISOString().split("T")[0],
+                isAttendanceOpen: updated.isAttendanceOpen
             }
         });
     } catch (err) {
@@ -83,42 +95,82 @@ export const closeAttendance = async (req: Request, res: Response) => {
     }
 
     try {
-        const schema = z.object({ classId: z.number() });
+        const schema = z.object({ sessionId: z.number() });
         const result = schema.safeParse(req.body);
         if (!result.success) {
             return res.status(400).json({ message: "Invalid input" });
         }
 
-        const { classId } = result.data;
+        const { sessionId } = result.data;
 
-        const class_ = await prisma.class.findUnique({ where: { id: classId } });
-        if (!class_) return res.status(400).json({ message: "Class not found" });
+        const session = await prisma.session.findUnique({
+            where: { id: sessionId },
+            include: { class: true }
+        });
+        if (!session) return res.status(400).json({ message: "Session not found" });
 
-        if (class_.teacherId !== req.userId) {
+        if (session.class.teacherId !== req.userId) {
             return res.status(403).json({ message: "You are not authorized to close attendance" });
         }
 
-        if (!class_.isAttendanceOpen) {
-            return res.status(400).json({ message: "Class is already closed for attendance" });
+        if (!session.isAttendanceOpen) {
+            return res.status(400).json({ message: "Session is already closed for attendance" });
         }
 
-        const updated = await prisma.class.update({
-            where: { id: classId },
+        const updated = await prisma.session.update({
+            where: { id: sessionId },
             data: { isAttendanceOpen: false }
         });
 
         res.status(200).json({
             message: "Attendance closed successfully",
-            class: {
+            session: {
                 id: updated.id,
-                name: updated.name,
-                isAttendanceOpen: updated.isAttendanceOpen,
-                teacherId: updated.teacherId
+                classId: updated.classId,
+                date: updated.date.toISOString().split("T")[0],
+                isAttendanceOpen: updated.isAttendanceOpen
             }
         });
     } catch (err) {
         console.error("Close attendance error:", err);
         res.status(500).json({ message: "Server error" });
+    }
+};
+
+export const getSessionById = async (req: Request, res: Response) => {
+    try {
+        if (req.role !== "TEACHER") {
+            return res.status(403).json({ message: "Only teachers can get session details" });
+        }
+
+        const sessionId = Number(req.params.id);
+        if (!sessionId) {
+            return res.status(400).json({ message: "Invalid session id" });
+        }
+
+        const session = await prisma.session.findUnique({
+            where: { id: sessionId },
+            include: { class: true }
+        });
+
+        if (!session) {
+            return res.status(404).json({ message: "Session not found" });
+        }
+
+        if (session.class.teacherId !== req.userId) {
+            return res.status(403).json({ message: "You are not authorized to view this session" });
+        }
+
+        return res.json({
+            id: session.id,
+            classId: session.classId,
+            className: session.class.name,
+            date: session.date.toISOString().split("T")[0],
+            isAttendanceOpen: session.isAttendanceOpen
+        });
+    } catch (err) {
+        console.error("Get session error:", err);
+        return res.status(500).json({ message: "Server error" });
     }
 };
 
@@ -128,20 +180,23 @@ export const attendance = async (req: Request, res: Response) => {
             return res.status(403).json({ message: "Only teachers can get attendance" });
         }
 
-        const classId = Number(req.query.classId); // ✅ get from query params
-        if (!classId) {
-            return res.status(400).json({ message: "classId is required" });
+        const sessionId = Number(req.query.sessionId);
+        if (!sessionId) {
+            return res.status(400).json({ message: "sessionId is required" });
         }
 
-        const class_ = await prisma.class.findUnique({ where: { id: classId } });
-        if (!class_) return res.status(404).json({ message: "Class not found" });
+        const session = await prisma.session.findUnique({
+            where: { id: sessionId },
+            include: { class: true }
+        });
+        if (!session) return res.status(404).json({ message: "Session not found" });
 
-        if (class_.teacherId !== req.userId) {
+        if (session.class.teacherId !== req.userId) {
             return res.status(403).json({ message: "You are not authorized to get attendance" });
         }
 
         const enrolledStudents = await prisma.enrollment.findMany({
-            where: { classId },
+            where: { classId: session.classId },
             select: {
                 student: {
                     select: {
@@ -154,7 +209,7 @@ export const attendance = async (req: Request, res: Response) => {
 
         const attendanceRecords = await prisma.attendance.findMany({
             where: {
-                classId,
+                sessionId,
             },
             select: {
                 studentId: true,
@@ -173,7 +228,11 @@ export const attendance = async (req: Request, res: Response) => {
             };
         });
 
-        return res.json(attendanceList);
+        return res.json({
+            sessionId: session.id,
+            date: session.date.toISOString().split("T")[0],
+            attendance: attendanceList
+        });
     } catch (err) {
         console.error("Get attendance error:", err);
         return res.status(500).json({ message: "Server error" });

@@ -29,18 +29,48 @@ model User {
   attendances     Attendance[]
 }
 
+enum Weekday {
+  MONDAY
+  TUESDAY
+  WEDNESDAY
+  THURSDAY
+  FRIDAY
+  SATURDAY
+  SUNDAY
+}
+
 model Class {
-  id               Int       @id @default(autoincrement())
-  name             String
-  teacherId        Int
-  classDate        DateTime? @db.Date
-  teacher          User      @relation("TeacherClasses", fields: [teacherId], references: [userId])
-  isAttendanceOpen Boolean   @default(false)
+  id        Int    @id @default(autoincrement())
+  name      String
+  teacherId Int
+  teacher   User   @relation("TeacherClasses", fields: [teacherId], references: [userId])
+
+  // Recurrence: which weekdays this class meets on, and the date
+  // range across which sessions should be generated.
+  recurrenceDays Weekday[]
+  startDate      DateTime  @db.Date
+  endDate        DateTime  @db.Date
 
   enrollments Enrollment[]
+  sessions    Session[]
+
+  createdAt DateTime @default(now())
+}
+
+model Session {
+  id      Int      @id @default(autoincrement())
+  classId Int
+  date    DateTime @db.Date
+
+  isAttendanceOpen Boolean @default(false)
+
+  class       Class        @relation(fields: [classId], references: [id])
   attendances Attendance[]
 
   createdAt DateTime @default(now())
+
+  // A class can only have one session per calendar date.
+  @@unique([classId, date])
 }
 
 model Enrollment {
@@ -62,12 +92,12 @@ enum Status {
 model Attendance {
   id        Int      @id @default(autoincrement())
   date      DateTime @default(now())
-  classId   Int
+  sessionId Int
   studentId Int
   status    Status
 
-  class   Class @relation(fields: [classId], references: [id])
-  student User  @relation(fields: [studentId], references: [userId])
+  session Session @relation(fields: [sessionId], references: [id])
+  student User    @relation(fields: [studentId], references: [userId])
 
-  @@unique([classId, studentId])
+  @@unique([sessionId, studentId])
 }
