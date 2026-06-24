@@ -12,8 +12,6 @@ const WEEKDAYS = [
     "SATURDAY",
 ] as const;
 
-// Builds one Session per date between startDate and endDate (inclusive)
-// that falls on one of the selected recurrenceDays.
 function buildSessionDates(
     startDate: Date,
     endDate: Date,
@@ -25,7 +23,6 @@ function buildSessionDates(
 
     const dates: Date[] = [];
 
-    // Work in UTC day-steps so we don't drift across DST boundaries.
     const cursor = new Date(
         Date.UTC(
             startDate.getUTCFullYear(),
@@ -51,149 +48,190 @@ function buildSessionDates(
     return dates;
 }
 
-export const createClass = async (
-    req: Request,
-    res: Response
-) => {
+export const createClass = async (req: Request, res: Response) => {
     if (req.role !== "ADMIN") {
-        return res.status(400).json({
-            message: "Only admin can create class"
-        });
+        return res.status(400).json({ message: "Only admin can create class" });
     }
 
     try {
         const classSchema = z.object({
             name: z.string().min(2),
             teacherId: z.number(),
-            recurrenceDays: z
-                .array(z.enum(WEEKDAYS))
-                .min(1, "Select at least one weekday"),
+            recurrenceDays: z.array(z.enum(WEEKDAYS)).min(1, "Select at least one weekday"),
             startDate: z.string(),
             endDate: z.string()
         });
 
         const result = classSchema.safeParse(req.body);
-
         if (!result.success) {
-            console.log(
-                "Validation Error:",
-                result.error.format()
-            );
-
-            return res.status(400).json({
-                message: "Invalid input"
-            });
+            console.log("Validation Error:", result.error.format());
+            return res.status(400).json({ message: "Invalid input" });
         }
 
-        const {
-            name,
-            teacherId,
-            recurrenceDays,
-            startDate,
-            endDate
-        } = result.data;
+        const { name, teacherId, recurrenceDays, startDate, endDate } = result.data;
 
         const parsedStart = new Date(startDate);
         const parsedEnd = new Date(endDate);
 
-        if (
-            Number.isNaN(parsedStart.getTime()) ||
-            Number.isNaN(parsedEnd.getTime())
-        ) {
-            return res.status(400).json({
-                message: "Invalid startDate or endDate"
-            });
+        if (Number.isNaN(parsedStart.getTime()) || Number.isNaN(parsedEnd.getTime())) {
+            return res.status(400).json({ message: "Invalid startDate or endDate" });
         }
 
         if (parsedEnd < parsedStart) {
-            return res.status(400).json({
-                message: "endDate must be on or after startDate"
-            });
+            return res.status(400).json({ message: "endDate must be on or after startDate" });
         }
 
-        const teacher =
-            await prisma.user.findUnique({
-                where: {
-                    userId: teacherId
-                }
-            });
+        const teacher = await prisma.user.findUnique({ where: { userId: teacherId } });
+        if (!teacher) return res.status(400).json({ message: "Teacher not found" });
+        if (teacher.role !== "TEACHER") return res.status(400).json({ message: "Selected user is not a teacher" });
 
-        if (!teacher) {
-            return res.status(400).json({
-                message: "Teacher not found"
-            });
-        }
-
-        if (teacher.role !== "TEACHER") {
-            return res.status(400).json({
-                message: "Selected user is not a teacher"
-            });
-        }
-
-        const sessionDates = buildSessionDates(
-            parsedStart,
-            parsedEnd,
-            recurrenceDays
-        );
-
+        const sessionDates = buildSessionDates(parsedStart, parsedEnd, recurrenceDays);
         if (sessionDates.length === 0) {
             return res.status(400).json({
-                message:
-                    "No sessions fall within the given date range for the selected weekdays"
+                message: "No sessions fall within the given date range for the selected weekdays"
             });
         }
 
-        // Create the class and all of its sessions together so we never
-        // end up with a class that has zero sessions due to a partial failure.
         const newClass = await prisma.$transaction(async (tx) => {
             const created = await tx.class.create({
-                data: {
-                    name,
-                    teacherId,
-                    recurrenceDays,
-                    startDate: parsedStart,
-                    endDate: parsedEnd
-                }
+                data: { name, teacherId, recurrenceDays, startDate: parsedStart, endDate: parsedEnd }
             });
-
             await tx.session.createMany({
-                data: sessionDates.map(date => ({
-                    classId: created.id,
-                    date
-                }))
+                data: sessionDates.map(date => ({ classId: created.id, date }))
             });
-
             return created;
         });
 
         res.status(200).json({
-            message:
-                "Class created successfully",
+            message: "Class created successfully",
             newClass: {
                 id: newClass.id,
                 name: newClass.name,
                 teacherId: newClass.teacherId,
                 recurrenceDays: newClass.recurrenceDays,
-                startDate:
-                    newClass.startDate
-                        .toISOString()
-                        .split("T")[0],
-                endDate:
-                    newClass.endDate
-                        .toISOString()
-                        .split("T")[0],
+                startDate: newClass.startDate.toISOString().split("T")[0],
+                endDate: newClass.endDate.toISOString().split("T")[0],
                 sessionsCreated: sessionDates.length
             }
         });
     } catch (err) {
-        console.error(
-            "Create class error:",
-            err
-        );
+        console.error("Create class error:", err);
+        res.status(500).json({ message: "Server error" });
+    }
+};
 
-        res.status(500).json({
-            message: "Server error"
+export const updateClass = async (req: Request, res: Response) => {
+    if (req.role !== "ADMIN") {
+        return res.status(403).json({ message: "Only admin can update a class" });
+    }
+
+    try {
+        const classId = Number(req.params.id);
+        if (!classId) return res.status(400).json({ message: "Invalid class id" });
+
+        const schema = z.object({
+            name: z.string().min(2),
+            teacherId: z.number(),
+            recurrenceDays: z.array(z.enum(WEEKDAYS)).min(1, "Select at least one weekday"),
+            startDate: z.string(),
+            endDate: z.string()
         });
+
+        const result = schema.safeParse(req.body);
+        if (!result.success) {
+            console.log("Validation Error:", result.error.format());
+            return res.status(400).json({ message: "Invalid input" });
+        }
+
+        const { name, teacherId, recurrenceDays, startDate, endDate } = result.data;
+
+        const parsedStart = new Date(startDate);
+        const parsedEnd = new Date(endDate);
+
+        if (Number.isNaN(parsedStart.getTime()) || Number.isNaN(parsedEnd.getTime())) {
+            return res.status(400).json({ message: "Invalid startDate or endDate" });
+        }
+
+        if (parsedEnd < parsedStart) {
+            return res.status(400).json({ message: "endDate must be on or after startDate" });
+        }
+
+        const existing = await prisma.class.findUnique({ where: { id: classId } });
+        if (!existing) return res.status(404).json({ message: "Class not found" });
+
+        const teacher = await prisma.user.findUnique({ where: { userId: teacherId } });
+        if (!teacher) return res.status(400).json({ message: "Teacher not found" });
+        if (teacher.role !== "TEACHER") return res.status(400).json({ message: "Selected user is not a teacher" });
+
+        const sessionDates = buildSessionDates(parsedStart, parsedEnd, recurrenceDays);
+        if (sessionDates.length === 0) {
+            return res.status(400).json({
+                message: "No sessions fall within the given date range for the selected weekdays"
+            });
+        }
+
+        // Update class fields and regenerate sessions in one transaction.
+        // Deleting sessions cascades to their Attendance records (onDelete: Cascade
+        // on Session → Attendance defined in schema.prisma).
+        const updatedClass = await prisma.$transaction(async (tx) => {
+            const updated = await tx.class.update({
+                where: { id: classId },
+                data: { name, teacherId, recurrenceDays, startDate: parsedStart, endDate: parsedEnd }
+            });
+
+            // Wipe old sessions — cascades to attendance records automatically.
+            await tx.session.deleteMany({ where: { classId } });
+
+            // Recreate sessions for the new schedule.
+            await tx.session.createMany({
+                data: sessionDates.map(date => ({ classId, date }))
+            });
+
+            return updated;
+        });
+
+        res.status(200).json({
+            message: "Class updated successfully",
+            updatedClass: {
+                id: updatedClass.id,
+                name: updatedClass.name,
+                teacherId: updatedClass.teacherId,
+                recurrenceDays: updatedClass.recurrenceDays,
+                startDate: updatedClass.startDate.toISOString().split("T")[0],
+                endDate: updatedClass.endDate.toISOString().split("T")[0],
+                sessionsRecreated: sessionDates.length
+            }
+        });
+    } catch (err) {
+        console.error("Update class error:", err);
+        res.status(500).json({ message: "Server error" });
+    }
+};
+
+export const deleteClass = async (req: Request, res: Response) => {
+    if (req.role !== "ADMIN") {
+        return res.status(403).json({ message: "Only admin can delete a class" });
+    }
+
+    try {
+        const classId = Number(req.params.id);
+        if (!classId) return res.status(400).json({ message: "Invalid class id" });
+
+        const existing = await prisma.class.findUnique({ where: { id: classId } });
+        if (!existing) return res.status(404).json({ message: "Class not found" });
+
+        // onDelete: Cascade in schema.prisma handles:
+        //   Class → Session → Attendance (two-level cascade)
+        //   Class → Enrollment
+        await prisma.class.delete({ where: { id: classId } });
+
+        res.status(200).json({
+            message: "Class deleted successfully",
+            deletedClassId: classId
+        });
+    } catch (err) {
+        console.error("Delete class error:", err);
+        res.status(500).json({ message: "Server error" });
     }
 };
 
@@ -206,9 +244,7 @@ export const allClasses = async (req: Request, res: Response) => {
             include: {
                 teacher: true,
                 enrollments: true,
-                sessions: {
-                    orderBy: { date: "asc" }
-                }
+                sessions: { orderBy: { date: "asc" } }
             }
         });
 

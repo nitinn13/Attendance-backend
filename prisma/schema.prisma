@@ -13,6 +13,21 @@ enum Role {
   STUDENT
 }
 
+enum Weekday {
+  MONDAY
+  TUESDAY
+  WEDNESDAY
+  THURSDAY
+  FRIDAY
+  SATURDAY
+  SUNDAY
+}
+
+enum Status {
+  PRESENT
+  ABSENT
+}
+
 model User {
   userId     Int     @id @default(autoincrement())
   name       String
@@ -29,24 +44,12 @@ model User {
   attendances     Attendance[]
 }
 
-enum Weekday {
-  MONDAY
-  TUESDAY
-  WEDNESDAY
-  THURSDAY
-  FRIDAY
-  SATURDAY
-  SUNDAY
-}
-
 model Class {
   id        Int    @id @default(autoincrement())
   name      String
   teacherId Int
   teacher   User   @relation("TeacherClasses", fields: [teacherId], references: [userId])
 
-  // Recurrence: which weekdays this class meets on, and the date
-  // range across which sessions should be generated.
   recurrenceDays Weekday[]
   startDate      DateTime  @db.Date
   endDate        DateTime  @db.Date
@@ -64,12 +67,13 @@ model Session {
 
   isAttendanceOpen Boolean @default(false)
 
-  class       Class        @relation(fields: [classId], references: [id])
+  // Cascade: deleting a class deletes its sessions;
+  // deleting a session deletes its attendance records.
+  class       Class        @relation(fields: [classId], references: [id], onDelete: Cascade)
   attendances Attendance[]
 
   createdAt DateTime @default(now())
 
-  // A class can only have one session per calendar date.
   @@unique([classId, date])
 }
 
@@ -78,15 +82,11 @@ model Enrollment {
   classId   Int
   studentId Int
 
-  class   Class @relation(fields: [classId], references: [id])
+  // Cascade: deleting a class removes its enrollments.
+  class   Class @relation(fields: [classId], references: [id], onDelete: Cascade)
   student User  @relation(fields: [studentId], references: [userId])
 
   @@unique([classId, studentId])
-}
-
-enum Status {
-  PRESENT
-  ABSENT
 }
 
 model Attendance {
@@ -96,7 +96,8 @@ model Attendance {
   studentId Int
   status    Status
 
-  session Session @relation(fields: [sessionId], references: [id])
+  // Cascade: deleting a session removes its attendance records.
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   student User    @relation(fields: [studentId], references: [userId])
 
   @@unique([sessionId, studentId])
