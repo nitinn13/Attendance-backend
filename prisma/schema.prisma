@@ -39,9 +39,31 @@ model User {
 
   createdAt DateTime @default(now())
 
+  passwordResetTokens PasswordResetToken[]
+
+
   classesTeaching Class[]      @relation("TeacherClasses")
   enrollments     Enrollment[]
   attendances     Attendance[]
+}
+model PasswordResetToken {
+  id        Int      @id @default(autoincrement())
+  email     String   // The email address the token is for
+  token     String   // The actual reset code/token
+  expiresAt DateTime // When the token expires
+  used      Boolean  @default(false) // Whether the token has been used
+  
+  // Add relation to User - you can either store userId or keep email as identifier
+  // Option 1: Store userId (recommended for better relations)
+  userId    Int      @map("user_id")
+  user      User     @relation(fields: [userId], references: [userId])
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([email])
+  @@index([token])
+  @@unique([token]) // Ensure token uniqueness
 }
 
 model Class {

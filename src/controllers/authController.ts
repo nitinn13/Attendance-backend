@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from "uuid";
 import { type Request, type Response } from "express";
 import z from "zod";
 import { prisma } from "../prisma.js";
+import { generateResetCode, sendPasswordResetEmail } from "../services/emailService.js";
 
 const jwtSecret = process.env.JWT_SECRET as string;
 
@@ -245,5 +246,198 @@ export const logoutAllUsers = async (
         return res.status(500).json({
             message: "Server error",
         });
+    }
+};
+
+
+export const forgotPassword = async (req: Request, res: Response) => {
+    try {
+        const emailSchema = z.object({
+            email: z.string().email(),
+        });
+
+        const result = emailSchema.safeParse(req.body);
+        if (!result.success) {
+            return res.status(400).json({ message: "Invalid email format" });
+        }
+
+        const { email } = result.data;
+
+        // Check if user exists
+        const user = await prisma.user.findUnique({
+            where: { email },
+        });
+
+        if (!user) {
+            // Don't reveal that user doesn't exist (security)
+            return res.status(200).json({
+                message: "If an account exists with this email, you will receive a reset code.",
+            });
+        }
+
+        // Generate reset code
+        const resetCode = generateResetCode();
+        const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+        // Delete any existing unused tokens for this user
+        await prisma.passwordResetToken.deleteMany({
+            where: {
+                userId: user.userId,
+                used: false,
+            },
+        });
+
+        // Create new reset token
+        await prisma.passwordResetToken.create({
+            data: {
+                email: user.email,
+                userId: user.userId,
+                token: resetCode,
+                expiresAt,
+                used: false,
+            },
+        });
+
+        // Send email with reset code
+        await sendPasswordResetEmail(email, resetCode);
+
+        res.status(200).json({
+            message: "If an account exists with this email, you will receive a reset code.",
+        });
+    } catch (err) {
+        console.error("Forgot password error:", err);
+        res.status(500).json({ message: "Server error" });
+    }
+};
+
+// Verify Reset Code
+export const verifyResetCode = async (req: Request, res: Response) => {
+    try {
+        const verifySchema = z.object({
+            email: z.string().email(),
+            code: z.string().length(6),
+        });
+
+        const result = verifySchema.safeParse(req.body);
+        if (!result.success) {
+            return res.status(400).json({ message: "Invalid input" });
+        }
+
+        const { email, code } = result.data;
+
+        // Find user by email
+        const user = await prisma.user.findUnique({
+            where: { email },
+        });
+
+        if (!user) {
+            return res.status(400).json({
+                message: "Invalid or expired reset code",
+            });
+        }
+
+        // Find the token
+        const tokenRecord = await prisma.passwordResetToken.findFirst({
+            where: {
+                userId: user.userId,
+                token: code,
+                used: false,
+                expiresAt: {
+                    gt: new Date(),
+                },
+            },
+        });
+
+        if (!tokenRecord) {
+            return res.status(400).json({
+                message: "Invalid or expired reset code",
+            });
+        }
+
+        // Return success - code is valid
+        res.status(200).json({
+            message: "Code verified successfully",
+            valid: true,
+        });
+    } catch (err) {
+        console.error("Verify reset code error:", err);
+        res.status(500).json({ message: "Server error" });
+    }
+};
+
+// Reset Password - Set new password
+export const resetPassword = async (req: Request, res: Response) => {
+    try {
+        const resetSchema = z.object({
+            email: z.string().email(),
+            code: z.string().length(6),
+            newPassword: z.string().min(6),
+        });
+
+        const result = resetSchema.safeParse(req.body);
+        if (!result.success) {
+            return res.status(400).json({ message: "Invalid input" });
+        }
+
+        const { email, code, newPassword } = result.data;
+
+        // Find user by email
+        const user = await prisma.user.findUnique({
+            where: { email },
+        });
+
+        if (!user) {
+            return res.status(400).json({
+                message: "Invalid or expired reset code",
+            });
+        }
+
+        // Find the token
+        const tokenRecord = await prisma.passwordResetToken.findFirst({
+            where: {
+                userId: user.userId,
+                token: code,
+                used: false,
+                expiresAt: {
+                    gt: new Date(),
+                },
+            },
+        });
+
+        if (!tokenRecord) {
+            return res.status(400).json({
+                message: "Invalid or expired reset code",
+            });
+        }
+
+        // Hash the new password
+        const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+        // Update the user's password
+        await prisma.user.update({
+            where: { email },
+            data: { password: hashedPassword, uuid: null },
+        });
+
+        // Mark the token as used
+        await prisma.passwordResetToken.update({
+            where: { id: tokenRecord.id },
+            data: { used: true },
+        });
+
+        // Delete all other unused tokens for this user (security)
+        await prisma.passwordResetToken.deleteMany({
+            where: {
+                userId: user.userId,
+                used: false,
+            },
+        });
+
+        res.status(200).json({
+            message: "Password reset successful. You can now login with your new password.",
+        });
+    } catch (err) {
+        console.error("Reset password error:", err);
+        res.status(500).json({ message: "Server error" });
     }
 };
